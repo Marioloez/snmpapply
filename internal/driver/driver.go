@@ -7,6 +7,7 @@ package driver
 import (
 	"context"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -51,6 +52,29 @@ type Driver interface {
 	// Apply runs configure + save + verify. The session must already be at a
 	// usable prompt (banner consumed by the caller/detector).
 	Apply(ctx context.Context, s Session, p Params) (Report, error)
+	// SNMPConfig reads the device's current SNMP-related configuration with a
+	// vendor-specific show command, for backup BEFORE applying. Read-only. The
+	// session must be at a usable prompt; p supplies the credentials some CLIs
+	// need to reach a mode where the config is visible (e.g. Ruckus enable).
+	SNMPConfig(ctx context.Context, s Session, p Params) (string, error)
+}
+
+// ansiRe strips terminal escape sequences some CLIs (notably ZyNOS) interleave.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b[78]`)
+
+// captureSNMP turns a raw show-command capture into a stored backup: it drops
+// the echoed command line and ANSI noise and trims surrounding blank lines.
+func captureSNMP(cmd, out string) string {
+	out = ansiRe.ReplaceAllString(out, "")
+	var kept []string
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimRight(ln, " \r\t")
+		if strings.TrimSpace(ln) == strings.TrimSpace(cmd) { // echoed command
+			continue
+		}
+		kept = append(kept, ln)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 // moreRe matches the common pager prompts across these vendors.

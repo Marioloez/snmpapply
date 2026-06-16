@@ -64,3 +64,17 @@ func (arubawc) Apply(ctx context.Context, s Session, p Params) (Report, error) {
 	r.Detail = "snmp v2c read community applied and saved"
 	return r, nil
 }
+
+func (arubawc) SNMPConfig(ctx context.Context, s Session, _ Params) (string, error) {
+	_ = s.Sendline("no page")
+	if _, err := waitPrompt(ctx, s, wcPrompt); err != nil {
+		return "", err
+	}
+	const cmd = "show snmp-server"
+	_ = s.Sendline(cmd)
+	out, err := waitPrompt(ctx, s, wcPrompt)
+	if err != nil {
+		return "", err
+	}
+	return captureSNMP(cmd, out), nil
+}

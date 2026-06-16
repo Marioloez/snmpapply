@@ -34,27 +34,8 @@ func (ruckus) Apply(ctx context.Context, s Session, p Params) (Report, error) {
 	r := Report{Vendor: "ruckus"}
 
 	// Enter privileged (enable) mode.
-	_ = s.Sendline("enable")
-	idx, _, err := s.Expect(ctx, rkUserName, rkPass, rkPriv)
-	if err != nil {
+	if err := ruckusEnable(ctx, s, p); err != nil {
 		return r, err
-	}
-	switch idx {
-	case 0: // asks for User Name then Password
-		_ = s.Sendline(p.User)
-		if _, _, err := s.Expect(ctx, rkPass); err != nil {
-			return r, err
-		}
-		_ = s.Sendline(p.Password)
-		if _, err := waitPrompt(ctx, s, rkPriv); err != nil {
-			return r, err
-		}
-	case 1: // asks for Password only
-		_ = s.Sendline(p.Password)
-		if _, err := waitPrompt(ctx, s, rkPriv); err != nil {
-			return r, err
-		}
-	case 2: // already privileged
 	}
 
 	_ = s.Sendline("skip-page-display")
@@ -87,4 +68,49 @@ func (ruckus) Apply(ctx context.Context, s Session, p Params) (Report, error) {
 	r.Saved = true
 	r.Detail = "snmp v2c read community applied and saved"
 	return r, nil
+}
+
+// ruckusEnable drives the enable flow, which may re-prompt for user name and/or
+// password before landing at the privileged '#' prompt.
+func ruckusEnable(ctx context.Context, s Session, p Params) error {
+	_ = s.Sendline("enable")
+	idx, _, err := s.Expect(ctx, rkUserName, rkPass, rkPriv)
+	if err != nil {
+		return err
+	}
+	switch idx {
+	case 0: // asks for User Name then Password
+		_ = s.Sendline(p.User)
+		if _, _, err := s.Expect(ctx, rkPass); err != nil {
+			return err
+		}
+		_ = s.Sendline(p.Password)
+		if _, err := waitPrompt(ctx, s, rkPriv); err != nil {
+			return err
+		}
+	case 1: // asks for Password only
+		_ = s.Sendline(p.Password)
+		if _, err := waitPrompt(ctx, s, rkPriv); err != nil {
+			return err
+		}
+	case 2: // already privileged
+	}
+	return nil
+}
+
+func (ruckus) SNMPConfig(ctx context.Context, s Session, p Params) (string, error) {
+	if err := ruckusEnable(ctx, s, p); err != nil {
+		return "", err
+	}
+	_ = s.Sendline("skip-page-display")
+	if _, err := waitPrompt(ctx, s, rkPriv); err != nil {
+		return "", err
+	}
+	const cmd = "show running-config | include snmp-server"
+	_ = s.Sendline(cmd)
+	out, err := waitPrompt(ctx, s, rkPriv)
+	if err != nil {
+		return "", err
+	}
+	return captureSNMP(cmd, out), nil
 }

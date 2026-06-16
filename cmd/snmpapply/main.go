@@ -10,6 +10,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -47,6 +48,7 @@ func main() {
 	only := flag.String("only", "", "filtro de hosts separados por coma")
 	verbose := flag.Bool("v", false, "mostrar la sesión SSH en vivo")
 	forceZyxel := flag.Bool("force-zyxel", false, "configurar Zyxel también (SOBREESCRIBE su única comunidad SNMP)")
+	forceNoBackup := flag.Bool("force-no-backup", false, "configurar aunque falle el respaldo de la config SNMP (omite el fail-safe)")
 	noPrecheck := flag.Bool("no-precheck", false, "saltear el escaneo SNMP (fase 1) y configurar todos")
 	snmpTimeout := flag.Duration("snmp-timeout", 2*time.Second, "timeout del escaneo SNMP por dispositivo")
 	assumeYes := flag.Bool("yes", false, "no preguntar; configurar los pendientes directamente")
@@ -132,17 +134,42 @@ func main() {
 	probe := runner.Run(context.Background(), missing, probeOpts)
 
 	var reachable []config.Target
-	discarded := 0
+	backups := map[string]backupRecord{}
+	discarded, forcedNoBackup, skippedNoBackup := 0, 0, 0
 	for _, r := range probe {
 		if r.Err != nil {
-			discarded++
+			discarded++ // SSH/vendor failed: not reachable
 			continue
 		}
 		t := r.Target
 		t.Vendor = r.Vendor // carry the detected vendor so phase 3 skips re-detection
-		reachable = append(reachable, t)
+		switch {
+		case r.BackupErr == nil && strings.TrimSpace(r.Backup) != "":
+			backups[r.Target.Host] = backupRecord{Vendor: r.Vendor, SNMPConfig: r.Backup}
+			reachable = append(reachable, t)
+		case *forceNoBackup: // backup failed but the operator chose to proceed
+			reachable = append(reachable, t)
+			forcedNoBackup++
+		default: // fail-safe: never change what we couldn't back up
+			skippedNoBackup++
+		}
 	}
-	fmt.Println(paint(color, cBold, fmt.Sprintf("%d accesibles · %d descartados", len(reachable), discarded)))
+
+	// Persist the backup of the existing SNMP config before phase 3 can change it.
+	if path, err := writeBackup(backups); err != nil {
+		fmt.Fprintln(os.Stderr, "aviso: no se pudo escribir el respaldo:", err)
+	} else if path != "" {
+		fmt.Println(paint(color, cDim, fmt.Sprintf("respaldo: %s (%d equipos)", path, len(backups))))
+	}
+
+	line := fmt.Sprintf("%d accesibles · %d descartados (SSH)", len(reachable), discarded)
+	if skippedNoBackup > 0 {
+		line += fmt.Sprintf(" · %d omitidos sin respaldo", skippedNoBackup)
+	}
+	if forcedNoBackup > 0 {
+		line += fmt.Sprintf(" · %d forzados sin respaldo", forcedNoBackup)
+	}
+	fmt.Println(paint(color, cBold, line))
 
 	if len(reachable) == 0 {
 		fmt.Println(paint(color, cYellow, "\nNingún dispositivo respondió SSH — nada que configurar."))
@@ -182,7 +209,12 @@ func main() {
 		}
 	}
 	fmt.Println()
-	fmt.Println(paint(color, cBold, fmt.Sprintf("%d presentes · %d configurados · %d omitidos · %d descartados (SSH) · %d con error", present, configured, skipped, discarded, failed)) +
+	summary := fmt.Sprintf("%d presentes · %d configurados · %d omitidos · %d descartados (SSH)", present, configured, skipped, discarded)
+	if skippedNoBackup > 0 {
+		summary += fmt.Sprintf(" · %d sin respaldo", skippedNoBackup)
+	}
+	summary += fmt.Sprintf(" · %d con error", failed)
+	fmt.Println(paint(color, cBold, summary) +
 		paint(color, cDim, fmt.Sprintf("  (%s)", elapsed.Round(100*time.Millisecond))))
 	if failed > 0 {
 		os.Exit(1)
@@ -224,13 +256,47 @@ func dash(s string) string {
 }
 
 // printProbe streams one line per device in phase 2: a check plus the detected
-// vendor when SSH answered, or the reason it was discarded.
+// vendor and whether its current SNMP config was backed up, or the reason it was
+// discarded.
 func printProbe(r runner.Result, color bool) {
 	if r.Err != nil {
 		fmt.Printf("  %s %-16s %s\n", paint(color, cRed, "✗"), r.Target.Host, paint(color, cDim, probeReason(r.Err)))
 		return
 	}
-	fmt.Printf("  %s %-16s %s\n", paint(color, cGreen, "✓"), r.Target.Host, paint(color, cDim, r.Vendor))
+	mark, tag := paint(color, cGreen, "✓"), paint(color, cDim, "respaldado")
+	if r.BackupErr != nil || strings.TrimSpace(r.Backup) == "" {
+		mark, tag = paint(color, cYellow, "⚠"), paint(color, cYellow, "sin respaldo")
+	}
+	fmt.Printf("  %s %-16s %-10s %s\n", mark, r.Target.Host, r.Vendor, tag)
+}
+
+// backupRecord is one device's saved SNMP config in the backup file.
+type backupRecord struct {
+	Vendor     string `json:"vendor"`
+	SNMPConfig string `json:"snmp_config"`
+}
+
+// writeBackup persists the captured SNMP config of each device to a timestamped
+// JSON file in the current directory, NEVER overwriting a prior backup, so a
+// destructive apply always has an undo trail. Returns the path written, or "".
+func writeBackup(backups map[string]backupRecord) (string, error) {
+	if len(backups) == 0 {
+		return "", nil
+	}
+	now := time.Now()
+	doc := struct {
+		GeneratedAt string                  `json:"generated_at"`
+		Devices     map[string]backupRecord `json:"devices"`
+	}{now.Format(time.RFC3339), backups}
+	b, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	name := "community-backup-" + now.Format("20060102-150405") + ".json"
+	if err := os.WriteFile(name, append(b, '\n'), 0o600); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // probeReason maps a phase-2 failure to a short Spanish reason so the operator

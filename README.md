@@ -82,6 +82,7 @@ go run ./cmd/snmpapply               # escanea, confirma y luego configura
 | `-only`            | _(vacío)_        | filtro de hosts separados por coma   |
 | `-v`               | `false`          | muestra la sesión SSH en vivo        |
 | `-force-zyxel`     | `false`          | aplica también a Zyxel (SOBREESCRIBE su única comunidad) |
+| `-force-no-backup` | `false`          | configurar aunque falle el respaldo de la config SNMP (omite el fail-safe) |
 | `-no-precheck`     | `false`          | omite la fase 1 (escaneo SNMP); prueba SSH y configura todo el inventario |
 | `-snmp-timeout`    | `2s`             | timeout del escaneo SNMP por dispositivo |
 | `-yes`             | `false`          | saltea las confirmaciones de cada fase |
@@ -96,9 +97,11 @@ contra todo el inventario.
    muestra una tabla de qué dispositivos ya tienen la comunidad (`✅ configurado`)
    y cuáles todavía la necesitan (`❌ pendiente`) — ~100 ms cada uno, sin SSH.
 2. **Fase 2 · Acceso SSH + detección de vendor** — una sola conexión SSH por
-   equipo **valida las credenciales** y **detecta el vendor**, sin cambiar nada.
-   Los que no responden SSH (login inválido, inalcanzables) se **descartan** aquí;
-   solo los accesibles pasan a la fase 3.
+   equipo **valida las credenciales**, **detecta el vendor** y **respalda la
+   config SNMP actual** del equipo a un `.json`, todo sin cambiar nada. Los que
+   no responden SSH (login inválido, inalcanzables) se **descartan**; los que no
+   se pueden respaldar se **omiten** (salvo `-force-no-backup`). Solo los
+   accesibles y respaldados pasan a la fase 3.
 3. **Fase 3 · Configurar** — aplica solo a los accesibles. La salida es mínima:
    `✅` por cada uno configurado, `⊘` + motivo para un omitido, `❌` para una falla.
 
@@ -113,11 +116,12 @@ HOST         VENDOR  SNMP
 ¿Probar acceso SSH a los 4 dispositivos pendientes? [s/N]: s
 
 Fase 2 · Acceso SSH + detección de vendor — 4 dispositivo(s)
-  ✓ 192.0.2.11   zyxel
-  ✓ 192.0.2.16   huawei
+  ✓ 192.0.2.11   zyxel      respaldado
+  ✓ 192.0.2.16   huawei     respaldado
   ✗ 192.0.2.17   sin respuesta (timeout)
   ✗ 192.0.2.18   credenciales SSH inválidas
-2 accesibles · 2 descartados
+respaldo: community-backup-20260616-1432.json (2 equipos)
+2 accesibles · 2 descartados (SSH)
 
 ¿Configurar los 2 dispositivos accesibles? [s/N]: s
 
@@ -134,6 +138,36 @@ Re-aplicar es seguro igual: las comunidades se identifican por nombre, así que
 la misma nunca se duplica (verificado en Huawei/Aruba reales). `-yes` saltea las
 confirmaciones; `-no-precheck` omite la fase 1; `-dry-run` corre hasta la fase 2
 (valida SSH y vendor) y se detiene sin configurar.
+
+## Respaldo de comunidades
+
+En la fase 2, antes de aplicar nada, se lee la configuración SNMP actual de cada
+equipo (con el comando `show` propio de cada fabricante) y se guarda en un archivo
+`community-backup-<fecha>.json` en la carpeta actual — **nunca sobreescribe** uno
+previo, así que cada corrida deja su propia foto. Es la red de seguridad por si un
+equipo mal detectado o una variante inesperada resultara ser de comunidad única y
+aplicar le pisara la suya.
+
+```json
+{
+  "generated_at": "2026-06-16T14:32:05Z",
+  "devices": {
+    "192.0.2.16": {
+      "vendor": "huawei",
+      "snmp_config": "snmp-agent community read cipher %^%#...%^%#\nsnmp-agent sys-info version v2c"
+    }
+  }
+}
+```
+
+El respaldo es **fail-safe**: si no se puede leer la config de un equipo, ese
+equipo se **omite** (no se configura lo que no se pudo respaldar). `-force-no-backup`
+invierte esa política y configura igual. El archivo contiene comunidades reales,
+por eso está en `.gitignore`.
+
+> Los comandos `show` de respaldo por fabricante son los estándar de cada CLI,
+> pero **valida el respaldo contra un equipo real por familia** antes de confiar
+> en él para un rollback — igual que con los comandos de configuración.
 
 ## Fabricantes de comunidad única (Zyxel)
 

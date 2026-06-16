@@ -3,6 +3,9 @@
 .env
 inventory.json
 
+# Community backups (contain the client's existing SNMP community values)
+community-backup-*.json
+
 # Build output
 /dist/
 /snmpapply

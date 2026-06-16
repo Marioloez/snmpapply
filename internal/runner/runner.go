@@ -66,12 +66,14 @@ func Scan(ctx context.Context, targets []config.Target, snmpTimeout time.Duratio
 
 // Result is the outcome for one device.
 type Result struct {
-	Target  config.Target
-	Vendor  string
-	Report  driver.Report
-	Err     error
-	Skipped bool
-	Elapsed time.Duration
+	Target    config.Target
+	Vendor    string
+	Report    driver.Report
+	Err       error
+	Skipped   bool
+	Backup    string // device's current SNMP config, captured during the probe
+	BackupErr error  // non-nil if the backup read failed
+	Elapsed   time.Duration
 }
 
 const skipDetail = "omitido: vendor de comunidad única — configurar sobreescribiría la comunidad existente (usa -force-zyxel para forzar)"
@@ -192,6 +194,11 @@ func runOne(ctx context.Context, t config.Target, opts Options) (res Result) {
 	}
 
 	if opts.DryRun {
+		// Phase 2 doubles as the backup pass: capture the device's existing SNMP
+		// config before phase 3 can change it.
+		res.Backup, res.BackupErr = drv.SNMPConfig(dctx, conn, driver.Params{
+			Community: t.Community, User: usedUser, Password: t.Password,
+		})
 		detail := "dry-run: vendor detected, no changes applied"
 		if drv.SingleCommunity() && !opts.ForceOverwrite {
 			detail = "dry-run: " + drv.Name() + " detected — single-community, skipped on apply (use -force-zyxel)"

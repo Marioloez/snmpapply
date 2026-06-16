@@ -65,3 +65,13 @@ func (zyxel) Apply(ctx context.Context, s Session, p Params) (Report, error) {
 	r.Detail = "snmp v2c get-community applied and saved"
 	return r, nil
 }
+
+func (zyxel) SNMPConfig(ctx context.Context, s Session, _ Params) (string, error) {
+	const cmd = "show snmp-server"
+	_ = s.Sendline(cmd)
+	out, err := waitPrompt(ctx, s, zyPrompt)
+	if err != nil {
+		return "", err
+	}
+	return captureSNMP(cmd, out), nil
+}

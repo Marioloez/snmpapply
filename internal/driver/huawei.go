@@ -78,3 +78,17 @@ func (huawei) Apply(ctx context.Context, s Session, p Params) (Report, error) {
 	r.Detail = "snmp v2c read community applied and saved"
 	return r, nil
 }
+
+func (huawei) SNMPConfig(ctx context.Context, s Session, _ Params) (string, error) {
+	_ = s.Sendline("screen-length 0 temporary")
+	if _, err := waitPrompt(ctx, s, hwUser); err != nil {
+		return "", err
+	}
+	const cmd = "display current-configuration | include snmp-agent"
+	_ = s.Sendline(cmd)
+	out, err := waitPrompt(ctx, s, hwUser)
+	if err != nil {
+		return "", err
+	}
+	return captureSNMP(cmd, out), nil
+}

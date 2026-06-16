@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -26,5 +29,45 @@ func TestProbeReason(t *testing.T) {
 				t.Errorf("probeReason(%q) = %q, want %q", c.err, got, c.want)
 			}
 		})
+	}
+}
+
+func TestWriteBackup(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(old)
+
+	backups := map[string]backupRecord{
+		"192.0.2.16": {Vendor: "huawei", SNMPConfig: "snmp-agent community read cipher %^%#x%^%#"},
+	}
+	path, err := writeBackup(backups)
+	if err != nil || path == "" {
+		t.Fatalf("writeBackup: path=%q err=%v", path, err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		GeneratedAt string                  `json:"generated_at"`
+		Devices     map[string]backupRecord `json:"devices"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("backup is not valid json: %v", err)
+	}
+	if doc.GeneratedAt == "" {
+		t.Error("generated_at missing")
+	}
+	if got := doc.Devices["192.0.2.16"]; got.Vendor != "huawei" || !strings.Contains(got.SNMPConfig, "cipher") {
+		t.Errorf("device record not persisted: %+v", got)
+	}
+
+	// No devices → nothing written, no error.
+	if p, err := writeBackup(nil); err != nil || p != "" {
+		t.Errorf("empty backup should write nothing: p=%q err=%v", p, err)
 	}
 }
