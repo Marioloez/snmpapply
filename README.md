@@ -215,3 +215,7 @@ internal/runner      pool acotado de workers, rutea cada dispositivo a su driver
 
 Agregar un fabricante = implementar la interfaz `driver.Driver` y registrarla en
 `registry.go`. El orquestador no cambia.
+
+## Licencia
+
+[MIT](LICENSE) © 2026 Marioloez.
