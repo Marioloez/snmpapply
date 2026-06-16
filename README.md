@@ -17,6 +17,7 @@ multiplataforma (sin Python, sin `sshpass`, sin runtime de `pexpect`).
 | ArubaOS WC/ProCurve   | `aruba-wc`, `procurve`, `wc` |
 | Ruckus ICX / IronWare | `ruckus`, `icx`, `ironware`  |
 | Zyxel ZyNOS           | `zyxel`, `zynos`             |
+| Cisco IOS / IOS-XE    | `cisco`, `ios`, `catalyst`   |
 
 ## Cómo funciona la detección de fabricante
 
@@ -27,7 +28,7 @@ para configurar:
 1. **Banner** — Huawei (prompt `<...>`) y ProCurve ("Press any key") quedan
    resueltos de inmediato.
 2. **Sondeo** — para un prompt ambiguo `#`/`>`, se envía `show version` y la
-   salida distingue Ruckus de ArubaOS-CX. Zyxel se anuncia en el banner de
+   salida distingue Cisco, Ruckus y ArubaOS-CX. Zyxel se anuncia en el banner de
    login ("Zyxel Communications"), así que se resuelve sin sondeo.
 
 Define `"vendor"` explícitamente en `inventory.json` para omitir la detección

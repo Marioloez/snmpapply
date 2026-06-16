@@ -122,11 +122,35 @@ func TestZyxelApply(t *testing.T) {
 	}
 }
 
+func TestCiscoApply(t *testing.T) {
+	steps := []reply{
+		{regexp.MustCompile(`enable`), "\r\nPassword:"},
+		{regexp.MustCompile(`secret`), "\r\nMPS-Cat#"},
+		{regexp.MustCompile(`terminal length 0`), "\r\nMPS-Cat#"},
+		{regexp.MustCompile(`configure terminal`), "\r\nMPS-Cat(config)#"},
+		{regexp.MustCompile(`snmp-server community .* RO`), "\r\nMPS-Cat(config)#"},
+		{regexp.MustCompile(`end`), "\r\nMPS-Cat#"},
+		{regexp.MustCompile(`show running-config \| include snmp-server community`), "\r\nsnmp-server community snmp_test RO\r\nMPS-Cat#"},
+		{regexp.MustCompile(`write memory`), "\r\nBuilding configuration...\r\n[OK]\r\nMPS-Cat#"},
+	}
+	s := newScriptedSession("\r\nMPS-Cat>", steps)
+	ctx := context.Background()
+	s.Collect(ctx, 150*time.Millisecond, 1*time.Second)
+
+	rep, err := cisco{}.Apply(ctx, s, Params{Community: "snmp_test", User: "admin", Password: "secret"})
+	if err != nil {
+		t.Fatalf("apply error: %v", err)
+	}
+	if !rep.Applied || !rep.Saved || !rep.Verified {
+		t.Fatalf("expected applied+saved+verified, got %+v", rep)
+	}
+}
+
 func TestSingleCommunity(t *testing.T) {
 	if !(zyxel{}).SingleCommunity() {
 		t.Error("zyxel must report SingleCommunity() == true")
 	}
-	for _, d := range []Driver{huawei{}, arubacx{}, arubawc{}, ruckus{}} {
+	for _, d := range []Driver{huawei{}, arubacx{}, arubawc{}, ruckus{}, cisco{}} {
 		if d.SingleCommunity() {
 			t.Errorf("%s must report SingleCommunity() == false", d.Name())
 		}
@@ -143,6 +167,7 @@ func TestFingerprints(t *testing.T) {
 		{"Image stamp: ProCurve WC.16.10", "aruba-wc"},
 		{"Ruckus ICX7150-48 IronWare 08.0.95", "ruckus"},
 		{"Copyright (c) 1994 - 2018 Zyxel Communications Corp.", "zyxel"},
+		{"Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M)", "cisco"},
 	}
 	for _, c := range cases {
 		got := best(c.text)
