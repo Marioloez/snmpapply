@@ -31,9 +31,29 @@ func (f *fakeSession) Expect(_ context.Context, _ ...*regexp.Regexp) (int, strin
 }
 func (f *fakeSession) Transcript() string { return "" }
 
+func TestPrimeInBandLogin(t *testing.T) {
+	// Device presents an in-band "User Name:" / "Password:" login after the SSH
+	// transport already authenticated; Prime must answer with the SSH creds.
+	f := &fakeSession{collects: []string{"\r\nUser Name: ", "Password: ", "\r\nICX7150 Switch#"}}
+	Prime(context.Background(), f, "sit", "s3cr3t")
+
+	var sawUser, sawPass bool
+	for _, s := range f.sent {
+		if s == "sit" {
+			sawUser = true
+		}
+		if s == "s3cr3t" {
+			sawPass = true
+		}
+	}
+	if !sawUser || !sawPass {
+		t.Fatalf("expected in-band login to send user and pass; sent=%v", f.sent)
+	}
+}
+
 func TestIdentifyHuaweiFromBanner(t *testing.T) {
 	f := &fakeSession{collects: []string{"Huawei VRP Software\r\n<MPS-Sombrero>"}}
-	d, _, err := Identify(context.Background(), f, driver.All())
+	d, _, err := Identify(context.Background(), f, driver.All(), "sit", "pass")
 	if err != nil {
 		t.Fatalf("identify error: %v", err)
 	}
@@ -52,7 +72,7 @@ func TestIdentifyArubaCXViaProbe(t *testing.T) {
 		"\r\nswitch login\r\nswitch# ",     // generic banner -> ambiguous
 		"ArubaOS-CX Virtual.10.08.1010\r\n", // show version output -> decisive
 	}}
-	d, _, err := Identify(context.Background(), f, driver.All())
+	d, _, err := Identify(context.Background(), f, driver.All(), "sit", "pass")
 	if err != nil {
 		t.Fatalf("identify error: %v", err)
 	}

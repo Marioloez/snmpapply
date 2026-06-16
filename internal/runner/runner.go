@@ -174,9 +174,9 @@ func runOne(ctx context.Context, t config.Target, opts Options) (res Result) {
 			return res
 		}
 		drv = d
-		detect.Prime(dctx, conn) // consume banner so Apply starts at a prompt
+		detect.Prime(dctx, conn, usedUser, t.Password) // consume banner so Apply starts at a prompt
 	} else {
-		d, _, derr := detect.Identify(dctx, conn, driver.All())
+		d, _, derr := detect.Identify(dctx, conn, driver.All(), usedUser, t.Password)
 		if derr != nil {
 			res.Err = derr
 			return res

@@ -21,16 +21,25 @@ var moreRe = regexp.MustCompile(`(?i)(--+\s*more\s*--+|----\s*more|<--+\s*more\s
 // save/restore after its prompt). Anchored to end so body lines don't match.
 var promptish = regexp.MustCompile(`[#>\]]\s*(\x1b[78])?\s*$`)
 
+// loginUserRe / loginPassRe match an in-band CLI login presented INSIDE the SSH
+// session (e.g. Ruckus with AAA line login): transport auth already passed, but
+// the CLI runs its own "User Name:" / "Password:" login. Answered with the same
+// SSH credentials so detection can reach a real prompt.
+var (
+	loginUserRe = regexp.MustCompile(`(?i)(user\s?name|login)\s*:\s*$`)
+	loginPassRe = regexp.MustCompile(`(?i)password\s*:\s*$`)
+)
+
 // Prime drives the session to a usable prompt and returns the banner seen
 // (used for fingerprinting). It clears ProCurve's "Press any key" gate and is
 // patient with slow CLIs: ArubaOS-CX can take several seconds to initialize its
 // shell and stays silent until then, so we poll up to a generous deadline,
 // nudging with a carriage return while the device is quiet (harmless to
 // vendors already at a prompt) — the same trick netmiko/scrapli use.
-func Prime(ctx context.Context, s driver.Session) string {
+func Prime(ctx context.Context, s driver.Session, user, pass string) string {
 	var b strings.Builder
-	deadline := time.Now().Add(15 * time.Second)
-	nudges := 0
+	deadline := time.Now().Add(20 * time.Second)
+	nudges, logins := 0, 0
 	for time.Now().Before(deadline) {
 		chunk := s.Collect(ctx, 700*time.Millisecond, 3*time.Second)
 		b.WriteString(chunk)
@@ -38,6 +47,18 @@ func Prime(ctx context.Context, s driver.Session) string {
 
 		if strings.Contains(text, "Press any key") {
 			_ = s.Send(" ")
+			continue
+		}
+		// In-band login inside the session: answer once with the SSH creds,
+		// capped so wrong credentials don't loop forever.
+		if logins < 4 && loginPassRe.MatchString(text) {
+			_ = s.Sendline(pass)
+			logins++
+			continue
+		}
+		if logins < 4 && loginUserRe.MatchString(text) {
+			_ = s.Sendline(user)
+			logins++
 			continue
 		}
 		if promptish.MatchString(text) {
@@ -53,8 +74,8 @@ func Prime(ctx context.Context, s driver.Session) string {
 
 // Identify returns the driver matching the device. It first tries to decide
 // from the banner alone; if ambiguous, it sends `show version` and re-scores.
-func Identify(ctx context.Context, s driver.Session, drivers []driver.Driver) (driver.Driver, string, error) {
-	banner := Prime(ctx, s)
+func Identify(ctx context.Context, s driver.Session, drivers []driver.Driver, user, pass string) (driver.Driver, string, error) {
+	banner := Prime(ctx, s, user, pass)
 	if d := best(drivers, banner, true); d != nil {
 		return d, banner, nil
 	}
