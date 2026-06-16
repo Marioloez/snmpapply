@@ -146,11 +146,35 @@ func TestCiscoApply(t *testing.T) {
 	}
 }
 
+func TestCiscoSBApply(t *testing.T) {
+	steps := []reply{
+		{regexp.MustCompile(`terminal datadump`), "\r\nMPS-ASADERO#"},
+		{regexp.MustCompile(`configure terminal`), "\r\nMPS-ASADERO(config)#"},
+		{regexp.MustCompile(`snmp-server server`), "\r\nMPS-ASADERO(config)#"},
+		{regexp.MustCompile(`snmp-server community .* ro`), "\r\nMPS-ASADERO(config)#"},
+		{regexp.MustCompile(`end`), "\r\nMPS-ASADERO#"},
+		{regexp.MustCompile(`show snmp`), "\r\n Community-String  snmp_test ro\r\nMPS-ASADERO#"},
+		{regexp.MustCompile(`copy running-config startup-config`), "\r\nOverwrite file [startup-config].... (Y/N)[N] ?"},
+		{regexp.MustCompile(`Y`), "\r\nCopy succeeded\r\nMPS-ASADERO#"},
+	}
+	s := newScriptedSession("\r\nMPS-ASADERO#", steps)
+	ctx := context.Background()
+	s.Collect(ctx, 150*time.Millisecond, 1*time.Second)
+
+	rep, err := ciscosb{}.Apply(ctx, s, Params{Community: "snmp_test", User: "sit", Password: "pass"})
+	if err != nil {
+		t.Fatalf("apply error: %v", err)
+	}
+	if !rep.Applied || !rep.Saved || !rep.Verified {
+		t.Fatalf("expected applied+saved+verified, got %+v", rep)
+	}
+}
+
 func TestSingleCommunity(t *testing.T) {
 	if !(zyxel{}).SingleCommunity() {
 		t.Error("zyxel must report SingleCommunity() == true")
 	}
-	for _, d := range []Driver{huawei{}, arubacx{}, arubawc{}, ruckus{}, cisco{}} {
+	for _, d := range []Driver{huawei{}, arubacx{}, arubawc{}, ruckus{}, cisco{}, ciscosb{}} {
 		if d.SingleCommunity() {
 			t.Errorf("%s must report SingleCommunity() == false", d.Name())
 		}
@@ -168,6 +192,7 @@ func TestFingerprints(t *testing.T) {
 		{"Ruckus ICX7150-48 IronWare 08.0.95", "ruckus"},
 		{"Copyright (c) 1994 - 2018 Zyxel Communications Corp.", "zyxel"},
 		{"Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M)", "cisco"},
+		{"Active-image: flash://system/images/image1.bin\r\n  Version: 2.4.0.94\r\nInactive-image: flash://system/images/_image1.bin", "cisco-sb"},
 	}
 	for _, c := range cases {
 		got := best(c.text)

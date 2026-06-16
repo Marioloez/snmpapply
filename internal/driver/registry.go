@@ -5,7 +5,7 @@ import "strings"
 // All returns every supported driver. Order matters only for tie-breaking in
 // detection (none currently tie).
 func All() []Driver {
-	return []Driver{huawei{}, arubacx{}, arubawc{}, ruckus{}, zyxel{}, cisco{}}
+	return []Driver{huawei{}, arubacx{}, arubawc{}, ruckus{}, zyxel{}, cisco{}, ciscosb{}}
 }
 
 // ByName resolves a vendor string (including common aliases) to a driver.
@@ -23,6 +23,8 @@ func ByName(name string) (Driver, bool) {
 		return zyxel{}, true
 	case "cisco", "ios", "ios-xe", "iosxe", "catalyst":
 		return cisco{}, true
+	case "cisco-sb", "ciscosb", "sx", "sg", "smb", "small-business":
+		return ciscosb{}, true
 	}
 	return nil, false
 }
