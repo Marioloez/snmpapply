@@ -77,49 +77,63 @@ go run ./cmd/snmpapply               # escanea, confirma y luego configura
 | `-timeout`         | `90s`            | timeout total por dispositivo        |
 | `-connect-timeout` | `8s`             | timeout de conexión SSH (los equipos muertos fallan así de rápido) |
 | `-io-timeout`      | `30s`            | timeout de lectura por paso          |
-| `-dry-run`         | `false`          | solo detecta el fabricante, sin cambios |
+| `-dry-run`         | `false`          | corre hasta la fase 2 (SSH + vendor), sin aplicar |
 | `-vendor`          | _(vacío)_        | fuerza un fabricante para todos      |
 | `-only`            | _(vacío)_        | filtro de hosts separados por coma   |
 | `-v`               | `false`          | muestra la sesión SSH en vivo        |
 | `-force-zyxel`     | `false`          | aplica también a Zyxel (SOBREESCRIBE su única comunidad) |
-| `-no-precheck`     | `false`          | saltea el escaneo SNMP (fase 1); configura todos |
+| `-no-precheck`     | `false`          | omite la fase 1 (escaneo SNMP); prueba SSH y configura todo el inventario |
 | `-snmp-timeout`    | `2s`             | timeout del escaneo SNMP por dispositivo |
-| `-yes`             | `false`          | no preguntar antes de la fase 2      |
+| `-yes`             | `false`          | saltea las confirmaciones de cada fase |
 
-## Corrida en dos fases
+## Corrida en tres fases
+
+Cada fase descarta lo que no corresponde, y hay una confirmación `s/N` antes de
+cada paso que toca los equipos. Así nunca se configura nada sin antes validar
+contra todo el inventario.
 
 1. **Fase 1 · Escaneo SNMP** — sondea todo el inventario con un GET SNMPv2c y
    muestra una tabla de qué dispositivos ya tienen la comunidad (`✅ configurado`)
    y cuáles todavía la necesitan (`❌ pendiente`) — ~100 ms cada uno, sin SSH.
-2. Un mensaje de confirmación pregunta si configurar los dispositivos pendientes
-   (se omite con `-yes`).
-3. **Fase 2 · Configurar** — se conecta solo a los dispositivos que la necesitan.
-   La salida es mínima: `✅` por cada uno configurado, `⊘` + motivo para un
-   omitido, `❌` + motivo para una falla.
+2. **Fase 2 · Acceso SSH + detección de vendor** — una sola conexión SSH por
+   equipo **valida las credenciales** y **detecta el vendor**, sin cambiar nada.
+   Los que no responden SSH (login inválido, inalcanzables) se **descartan** aquí;
+   solo los accesibles pasan a la fase 3.
+3. **Fase 3 · Configurar** — aplica solo a los accesibles. La salida es mínima:
+   `✅` por cada uno configurado, `⊘` + motivo para un omitido, `❌` para una falla.
 
 ```
 Fase 1 · Escaneo SNMP — 11 dispositivo(s)
 HOST         VENDOR  SNMP
-192.0.2.9   -       ✅ configurado
-192.0.2.11  -       ❌ pendiente
+192.0.2.9    -       ✅ configurado
+192.0.2.11   -       ❌ pendiente
 ...
 7 configurados · 4 pendientes
 
-¿Configurar los 4 dispositivos pendientes? [s/N]: s
+¿Probar acceso SSH a los 4 dispositivos pendientes? [s/N]: s
 
-Fase 2 · Configurando 4 dispositivo(s)
+Fase 2 · Acceso SSH + detección de vendor — 4 dispositivo(s)
+  ✓ 192.0.2.11   zyxel
+  ✓ 192.0.2.16   huawei
+  ✗ 192.0.2.17   sin respuesta (timeout)
+  ✗ 192.0.2.18   credenciales SSH inválidas
+2 accesibles · 2 descartados
+
+¿Configurar los 2 dispositivos accesibles? [s/N]: s
+
+Fase 3 · Configurando 2 dispositivo(s)
   ✅ 192.0.2.16   huawei
   ⊘ 192.0.2.11   omitido: vendor de comunidad única (usa -force-zyxel)
-  ❌ 192.0.2.17   handshake ssh ... i/o timeout
 
-7 presentes · 1 configurados · 2 omitidos · 1 con error  (13s)
+7 presentes · 1 configurados · 1 omitidos · 2 descartados (SSH) · 0 con error  (9s)
 ```
 
 Así una re-corrida solo toca lo que todavía hace falta — ideal después de una
 pasada parcial donde algunos dieron timeout o quedaron limitados por tasa.
 Re-aplicar es seguro igual: las comunidades se identifican por nombre, así que
-la misma nunca se duplica (verificado en Huawei/Aruba reales). Usa
-`-no-precheck` para omitir la fase 1 y configurar todo.
+la misma nunca se duplica (verificado en Huawei/Aruba reales). `-yes` saltea las
+confirmaciones; `-no-precheck` omite la fase 1; `-dry-run` corre hasta la fase 2
+(valida SSH y vendor) y se detiene sin configurar.
 
 ## Fabricantes de comunidad única (Zyxel)
 

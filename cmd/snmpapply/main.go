@@ -42,7 +42,7 @@ func main() {
 	deviceTimeout := flag.Duration("timeout", 90*time.Second, "timeout total por dispositivo")
 	connectTimeout := flag.Duration("connect-timeout", 8*time.Second, "timeout de conexión SSH (los equipos muertos fallan así de rápido)")
 	ioTimeout := flag.Duration("io-timeout", 30*time.Second, "timeout de lectura por paso")
-	dryRun := flag.Bool("dry-run", false, "solo escanear; lista lo que se configuraría, sin cambios")
+	dryRun := flag.Bool("dry-run", false, "escanear y probar SSH/vendor sin aplicar cambios")
 	vendor := flag.String("vendor", "", "forzar este vendor para todos (sin autodetección)")
 	only := flag.String("only", "", "filtro de hosts separados por coma")
 	verbose := flag.Bool("v", false, "mostrar la sesión SSH en vivo")
@@ -105,19 +105,6 @@ func main() {
 		}
 	}
 
-	if *dryRun {
-		fmt.Printf("\nSimulación: se configurarían %d dispositivo(s): %s\n", len(missing), hostsCSV(missing))
-		return
-	}
-
-	// Confirmación antes de tocar nada.
-	if !*assumeYes && !confirm(color, len(missing)) {
-		fmt.Println("Cancelado.")
-		return
-	}
-
-	// ── Fase 2 · configurar los pendientes ───────────────────────────────
-	fmt.Println(paint(color, cBold, fmt.Sprintf("\nFase 2 · Configurando %d dispositivo(s)", len(missing))))
 	opts := runner.Options{
 		Concurrency:    *concurrency,
 		DeviceTimeout:  *deviceTimeout,
@@ -126,12 +113,61 @@ func main() {
 		Out:            os.Stdout,
 		ForceOverwrite: *forceZyxel,
 	}
+
+	// ── Fase 2 · Acceso SSH + detección de vendor ────────────────────────
+	// A single SSH connection per device validates the credentials AND detects
+	// the vendor, without changing anything. Devices that don't answer SSH (bad
+	// login, unreachable) are discarded here; only the survivors reach phase 3.
+	if !*assumeYes && !confirm(color, fmt.Sprintf("¿Probar acceso SSH a los %d dispositivos pendientes?", len(missing))) {
+		fmt.Println("Cancelado.")
+		return
+	}
+	fmt.Println(paint(color, cBold, fmt.Sprintf("\nFase 2 · Acceso SSH + detección de vendor — %d dispositivo(s)", len(missing))))
+
+	probeOpts := opts
+	probeOpts.DryRun = true // connect + detect, never apply
+	if !*verbose {
+		probeOpts.OnResult = func(_, _ int, r runner.Result) { printProbe(r, color) }
+	}
+	probe := runner.Run(context.Background(), missing, probeOpts)
+
+	var reachable []config.Target
+	discarded := 0
+	for _, r := range probe {
+		if r.Err != nil {
+			discarded++
+			continue
+		}
+		t := r.Target
+		t.Vendor = r.Vendor // carry the detected vendor so phase 3 skips re-detection
+		reachable = append(reachable, t)
+	}
+	fmt.Println(paint(color, cBold, fmt.Sprintf("%d accesibles · %d descartados", len(reachable), discarded)))
+
+	if len(reachable) == 0 {
+		fmt.Println(paint(color, cYellow, "\nNingún dispositivo respondió SSH — nada que configurar."))
+		return
+	}
+
+	if *dryRun {
+		fmt.Printf("\nSimulación: se configurarían %d dispositivo(s): %s\n", len(reachable), hostsCSV(reachable))
+		return
+	}
+
+	// ── Fase 3 · Configurar los accesibles ───────────────────────────────
+	if !*assumeYes && !confirm(color, fmt.Sprintf("¿Configurar los %d dispositivos accesibles?", len(reachable))) {
+		fmt.Println("Cancelado.")
+		return
+	}
+	fmt.Println(paint(color, cBold, fmt.Sprintf("\nFase 3 · Configurando %d dispositivo(s)", len(reachable))))
+
+	applyOpts := opts
 	if !*verbose { // verbose already streams raw session output; don't double up
-		opts.OnResult = func(_, _ int, r runner.Result) { printApply(r, color) }
+		applyOpts.OnResult = func(_, _ int, r runner.Result) { printApply(r, color) }
 	}
 
 	start := time.Now()
-	results := runner.Run(context.Background(), missing, opts)
+	results := runner.Run(context.Background(), reachable, applyOpts)
 	elapsed := time.Since(start)
 
 	configured, skipped, failed := 0, 0, 0
@@ -146,16 +182,16 @@ func main() {
 		}
 	}
 	fmt.Println()
-	fmt.Println(paint(color, cBold, fmt.Sprintf("%d presentes · %d configurados · %d omitidos · %d con error", present, configured, skipped, failed)) +
+	fmt.Println(paint(color, cBold, fmt.Sprintf("%d presentes · %d configurados · %d omitidos · %d descartados (SSH) · %d con error", present, configured, skipped, discarded, failed)) +
 		paint(color, cDim, fmt.Sprintf("  (%s)", elapsed.Round(100*time.Millisecond))))
 	if failed > 0 {
 		os.Exit(1)
 	}
 }
 
-// confirm asks the user whether to configure the pending devices.
-func confirm(color bool, n int) bool {
-	fmt.Print(paint(color, cBold, fmt.Sprintf("\n¿Configurar los %d dispositivos pendientes? [s/N]: ", n)))
+// confirm asks the user a yes/no question and reports whether they accepted.
+func confirm(color bool, msg string) bool {
+	fmt.Print(paint(color, cBold, fmt.Sprintf("\n%s [s/N]: ", msg)))
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "s", "si", "sí", "y", "yes":
@@ -185,6 +221,36 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// printProbe streams one line per device in phase 2: a check plus the detected
+// vendor when SSH answered, or the reason it was discarded.
+func printProbe(r runner.Result, color bool) {
+	if r.Err != nil {
+		fmt.Printf("  %s %-16s %s\n", paint(color, cRed, "✗"), r.Target.Host, paint(color, cDim, probeReason(r.Err)))
+		return
+	}
+	fmt.Printf("  %s %-16s %s\n", paint(color, cGreen, "✓"), r.Target.Host, paint(color, cDim, r.Vendor))
+}
+
+// probeReason maps a phase-2 failure to a short Spanish reason so the operator
+// can tell a credential problem from an unreachable host at a glance.
+func probeReason(err error) string {
+	s := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(s, "unable to authenticate"):
+		return "credenciales SSH inválidas"
+	case strings.Contains(s, "i/o timeout"), strings.Contains(s, "deadline exceeded"):
+		return "sin respuesta (timeout)"
+	case strings.Contains(s, "connection refused"):
+		return "conexión rechazada"
+	case strings.Contains(s, "no route to host"), strings.Contains(s, "no such host"):
+		return "host inalcanzable"
+	case strings.Contains(s, "no se pudo identificar"):
+		return "vendor no identificado"
+	default:
+		return firstLine(err.Error())
+	}
 }
 
 // printApply streams one minimal line per device as it finishes: a check for
