@@ -1,0 +1,8 @@
+# Secrets and real device lists (contain client IPs/credentials).
+# The *.example files ARE tracked as templates.
+.env
+inventory.json
+
+# Build output
+/dist/
+/snmpapply
