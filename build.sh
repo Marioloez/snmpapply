@@ -19,4 +19,4 @@ done
 
 # Checksums of the binaries only (sha256sum on Linux, shasum on macOS).
 ( cd dist && { command -v sha256sum >/dev/null && sha256sum snmpapply-* || shasum -a 256 snmpapply-*; } > SHA256SUMS )
-echo "Listo — versión ${version}, $(ls dist | grep -vc SHA256SUMS) binarios + SHA256SUMS"
+echo "Listo — versión ${version}, $(ls dist/snmpapply-* | wc -l) binarios + SHA256SUMS"
