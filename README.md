@@ -138,9 +138,11 @@ El binario busca `inventory.json` y `.env` **junto a sí mismo** (y como respald
 en el directorio actual), así que el armado portable es: una carpeta con el
 binario + sus dos archivos de configuración. Sin parámetros — solo `./snmpapply`.
 
-Una línea: descarga a la carpeta actual el binario para tu SO/arquitectura desde
+Cada instalador descarga a la carpeta actual el binario para tu plataforma desde
 GitHub Releases, verifica su checksum y deja también las plantillas
-`.env.example` e `inventory.example.json` como referencia:
+`.env.example` e `inventory.example.json` como referencia.
+
+### Linux / macOS
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Marioloez/snmpapply/main/install.sh | sh
@@ -149,8 +151,20 @@ curl -fsSL https://raw.githubusercontent.com/Marioloez/snmpapply/main/install.sh
 ./snmpapply
 ```
 
-O descarga el binario correspondiente a mano desde la página de Releases. Windows:
-descarga `snmpapply-windows-amd64.exe`.
+### Windows (PowerShell)
+
+El one-liner de arriba usa `sh`, que Windows no tiene. En PowerShell, usa:
+
+```powershell
+irm https://raw.githubusercontent.com/Marioloez/snmpapply/main/install.ps1 | iex
+# copia .env.example a .env e inventory.example.json a inventory.json,
+# complétalos y ejecuta:
+.\snmpapply.exe
+```
+
+O descarga el binario a mano desde la página de Releases
+(`snmpapply-windows-amd64.exe` en Windows) y crea junto a él el `inventory.json`
+y el `.env`.
 
 ## Compilación / release (mantenedores)
 
