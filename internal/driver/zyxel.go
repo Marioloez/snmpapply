@@ -14,7 +14,10 @@ import (
 //   - SNMP is v2c by default — no version command needed.
 //   - The prompt is followed by an ANSI ESC-7 (save-cursor) sequence, and the
 //     device application-echoes commands even with PTY ECHO off.
-//   - `show` and `write` are EXEC-only; the community is set in config mode.
+//   - `show` and `write memory` are EXEC-only; the community is set in config
+//     mode. Use `write memory`, NOT bare `write`: some ZyNOS firmware (e.g. the
+//     GS2210 family) reject bare `write` with "% Incomplete command" and never
+//     persist, so the community survives only until the next reboot.
 type zyxel struct{}
 
 // zyPrompt matches both EXEC ('#') and config ('(config)#') prompts, tolerating
@@ -52,7 +55,7 @@ func (zyxel) Apply(ctx context.Context, s Session, p Params) (Report, error) {
 	if _, err := waitPrompt(ctx, s, zyPrompt); err != nil {
 		return r, err
 	}
-	_ = s.Sendline("write")
+	_ = s.Sendline("write memory")
 	if _, err := waitPrompt(ctx, s, zyPrompt); err != nil {
 		return r, err
 	}
